@@ -66,7 +66,7 @@ typedef struct {
 #endif
 } heatshrink_decoder;
 
-#if HEATSHRINK_DYNAMIC_ALLOC
+//#if HEATSHRINK_DYNAMIC_ALLOC
 /* Allocate a decoder with an input buffer of INPUT_BUFFER_SIZE bytes,
  * an expansion buffer size of 2^WINDOW_SZ2, and a lookahead
  * size of 2^lookahead_sz2. (The window buffer and lookahead sizes
@@ -97,4 +97,4 @@ HSD_poll_res heatshrink_decoder_poll(heatshrink_decoder *hsd,
  * call heatshrink_decoder_poll and repeat. */
 HSD_finish_res heatshrink_decoder_finish(heatshrink_decoder *hsd);
 
-#endif
+//#endif

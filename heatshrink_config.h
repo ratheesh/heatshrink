@@ -2,9 +2,11 @@
 #define HEATSHRINK_CONFIG_H
 
 /* Should functionality assuming dynamic allocation be used? */
-#ifndef HEATSHRINK_DYNAMIC_ALLOC
-#define HEATSHRINK_DYNAMIC_ALLOC 1
-#endif
+/*
+ * #ifndef HEATSHRINK_DYNAMIC_ALLOC
+ * #define HEATSHRINK_DYNAMIC_ALLOC 0
+ * #endif
+ */
 
 #if HEATSHRINK_DYNAMIC_ALLOC
     /* Optional replacement of malloc/free */
@@ -12,8 +14,8 @@
     #define HEATSHRINK_FREE(P, SZ) free(P)
 #else
     /* Required parameters for static configuration */
-    #define HEATSHRINK_STATIC_INPUT_BUFFER_SIZE 32
-    #define HEATSHRINK_STATIC_WINDOW_BITS 8
+    #define HEATSHRINK_STATIC_INPUT_BUFFER_SIZE 256
+    #define HEATSHRINK_STATIC_WINDOW_BITS 11
     #define HEATSHRINK_STATIC_LOOKAHEAD_BITS 4
 #endif
 

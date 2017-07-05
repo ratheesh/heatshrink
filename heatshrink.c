@@ -9,12 +9,12 @@
 
 #include "heatshrink_decoder.h"
 
-#define DEF_WINDOW_SZ2 11
-#define DEF_LOOKAHEAD_SZ2 4
-#define DEF_DECODER_INPUT_BUFFER_SIZE 256
-#define DEF_BUFFER_SIZE (64 * 1024)
+#define DEF_WINDOW_SZ2 HEATSHRINK_STATIC_WINDOW_BITS
+#define DEF_LOOKAHEAD_SZ2 HEATSHRINK_STATIC_LOOKAHEAD_BITS
+#define DEF_DECODER_INPUT_BUFFER_SIZE HEATSHRINK_STATIC_INPUT_BUFFER_SIZE
+#define DEF_BUFFER_SIZE (4 * 1024)
 
-#if 1
+#if 0
 #define LOG(...) fprintf(stderr, __VA_ARGS__)
 #else
 #define LOG(...) /* NO-OP */
@@ -39,7 +39,7 @@ static const char url[] = HEATSHRINK_URL;
 
 static void usage(void) {
     fprintf(stderr, "heatshrink version %u.%u.%u by %s\n",
-        version_major, version_minor, version_patch, author);
+	version_major, version_minor, version_patch, author);
     exit(1);
 }
 
@@ -77,33 +77,45 @@ static void die(char *msg) {
 static void report(config *cfg);
 
 /* Open an IO handle. Returns NULL on error. */
+static unsigned char _z_IOR_Handle[sizeof(io_handle) + DEF_BUFFER_SIZE];
+static unsigned char _z_IOW_Handle[sizeof(io_handle) + DEF_BUFFER_SIZE];
 static io_handle *handle_open(char *fname, IO_mode m, size_t buf_sz) {
     io_handle *io = NULL;
-    io = malloc(sizeof(*io) + buf_sz);
-    if (io == NULL) { return NULL; }
-    memset(io, 0, sizeof(*io) + buf_sz);
+    /* io = malloc(sizeof(*io) + buf_sz); */
+    if (m == IO_READ) {
+	    io = (io_handle *)&_z_IOR_Handle[0];
+	    if (io == NULL) { return NULL; }
+	    memset(io, 0, sizeof(_z_IOR_Handle));
+    }
+
+    if (m == IO_WRITE) {
+	    io = (io_handle *)&_z_IOW_Handle[0];
+	    if (io == NULL) { return NULL; }
+	    memset(io, 0, sizeof(_z_IOW_Handle));
+    }
+
     io->fd = -1;
     io->size = buf_sz;
     io->mode = m;
 
     if (m == IO_READ) {
-        if (0 == strcmp("-", fname)) {
-            io->fd = STDIN_FILENO;
-        } else {
-            io->fd = open(fname, O_RDONLY | O_BINARY);
-        }
+	if (0 == strcmp("-", fname)) {
+	    io->fd = STDIN_FILENO;
+	} else {
+	    io->fd = open(fname, O_RDONLY | O_BINARY);
+	}
     } else if (m == IO_WRITE) {
-        if (0 == strcmp("-", fname)) {
-            io->fd = STDOUT_FILENO;
-        } else {
-            io->fd = open(fname, O_WRONLY | O_BINARY | O_CREAT | O_TRUNC /*| O_EXCL*/, 0644);
-        }
+	if (0 == strcmp("-", fname)) {
+	    io->fd = STDOUT_FILENO;
+	} else {
+	    io->fd = open(fname, O_WRONLY | O_BINARY | O_CREAT | O_TRUNC /*| O_EXCL*/, 0644);
+	}
     }
 
     if (io->fd == -1) {         /* failed to open */
-        free(io);
-        HEATSHRINK_ERR(1, "open");
-        return NULL;
+//free(io);
+	HEATSHRINK_ERR(1, "open");
+	return NULL;
     }
 
     return io;
@@ -115,34 +127,37 @@ static ssize_t handle_read(io_handle *io, size_t size, uint8_t **buf) {
     LOG("@ read %zd\n", size);
     if (buf == NULL) { return -1; }
     if (size > io->size) {
-        fprintf(stderr, "size %zd, io->size %zd\n", size, io->size);
-        return -1;
+	fprintf(stderr, "size %zd, io->size %zd\n", size, io->size);
+	return -1;
     }
     if (io->mode != IO_READ) { return -1; }
 
     size_t rem = io->fill - io->read;
     if (rem >= size) {
-        *buf = &io->buf[io->read];
-        return size;
+	*buf = &io->buf[io->read];
+	return size;
     } else {                    /* read and replenish */
-        if (io->fd == -1) {     /* already closed, return what we've got */
-            *buf = &io->buf[io->read];
-            return rem;
-        }
+	if (io->fd == -1) {     /* already closed, return what we've got */
+	    *buf = &io->buf[io->read];
+	    return rem;
+	}
 
-        memmove(io->buf, &io->buf[io->read], rem);
-        io->fill -= io->read;
-        io->read = 0;
-        ssize_t read_sz = read(io->fd, &io->buf[io->fill], io->size - io->fill);
-        if (read_sz < 0) { HEATSHRINK_ERR(1, "read"); }
-        io->total += read_sz;
-        if (read_sz == 0) {     /* EOF */
-            if (close(io->fd) < 0) { HEATSHRINK_ERR(1, "close"); }
-            io->fd = -1;
-        }
-        io->fill += read_sz;
-        *buf = io->buf;
-        return io->fill > size ? size : io->fill;
+	memmove(io->buf, &io->buf[io->read], rem);
+	io->fill -= io->read;
+	io->read = 0;
+
+	/* read from flash here */
+	ssize_t read_sz = read(io->fd, &io->buf[io->fill], io->size - io->fill);
+
+	if (read_sz < 0) { HEATSHRINK_ERR(1, "read"); }
+	io->total += read_sz;
+	if (read_sz == 0) {     /* EOF */
+	    if (close(io->fd) < 0) { HEATSHRINK_ERR(1, "close"); }
+	    io->fd = -1;
+	}
+	io->fill += read_sz;
+	*buf = io->buf;
+	return io->fill > size ? size : io->fill;
     }
 }
 
@@ -150,13 +165,13 @@ static ssize_t handle_read(io_handle *io, size_t size, uint8_t **buf) {
 static int handle_drop(io_handle *io, size_t size) {
     LOG("@ drop %zd\n", size);
     if (io->read + size <= io->fill) {
-        io->read += size;
+	io->read += size;
     } else {
-        return -1;
+	return -1;
     }
     if (io->read == io->fill) {
-        io->read = 0;
-        io->fill = 0;
+	io->read = 0;
+	io->fill = 0;
     }
     return 0;
 }
@@ -169,12 +184,15 @@ static ssize_t handle_sink(io_handle *io, size_t size, uint8_t *input) {
     if (io->mode != IO_WRITE) { return -1; }
 
     if (io->fill + size > io->size) {
-        ssize_t written = write(io->fd, io->buf, io->fill);
-        LOG("@ flushing %zd, wrote %zd\n", io->fill, written);
-        io->total += written;
-        if (written == -1) { HEATSHRINK_ERR(1, "write"); }
-        memmove(io->buf, &io->buf[written], io->fill - written);
-        io->fill -= written;
+
+	/* write io->buf to FPGA here */
+	ssize_t written = write(io->fd, io->buf, io->fill);
+
+	LOG("@ flushing %zd, wrote %zd\n", io->fill, written);
+	io->total += written;
+	if (written == -1) { HEATSHRINK_ERR(1, "write"); }
+	memmove(io->buf, &io->buf[written], io->fill - written);
+	io->fill -= written;
     }
     memcpy(&io->buf[io->fill], input, size);
     io->fill += size;
@@ -183,14 +201,16 @@ static ssize_t handle_sink(io_handle *io, size_t size, uint8_t *input) {
 
 static void handle_close(io_handle *io) {
     if (io->fd != -1) {
-        if (io->mode == IO_WRITE) {
-            ssize_t written = write(io->fd, io->buf, io->fill);
-            io->total += written;
-            LOG("@ close: flushing %zd, wrote %zd\n", io->fill, written);
-            if (written == -1) { HEATSHRINK_ERR(1, "write"); }
-        }
-        close(io->fd);
-        io->fd = -1;
+	if (io->mode == IO_WRITE) {
+
+	    /* write io->buf to FPGA here */
+	    ssize_t written = write(io->fd, io->buf, io->fill);
+	    io->total += written;
+	    LOG("@ close: flushing %zd, wrote %zd\n", io->fill, written);
+	    if (written == -1) { HEATSHRINK_ERR(1, "write"); }
+	}
+	close(io->fd);
+	io->fd = -1;
     }
 }
 
@@ -198,12 +218,12 @@ static void close_and_report(config *cfg) {
     handle_close(cfg->in);
     handle_close(cfg->out);
     if (cfg->verbose) { report(cfg); }
-    free(cfg->in);
-    free(cfg->out);
+//free(cfg->in);
+//    free(cfg->out);
 }
 
 static int decoder_sink_read(config *cfg, heatshrink_decoder *hsd,
-        uint8_t *data, size_t data_sz) {
+	uint8_t *data, size_t data_sz) {
     io_handle *out = cfg->out;
     size_t sink_sz = 0;
     size_t poll_sz = 0;
@@ -217,23 +237,23 @@ static int decoder_sink_read(config *cfg, heatshrink_decoder *hsd,
 
     size_t sunk = 0;
     do {
-        if (data_sz > 0) {
-            sres = heatshrink_decoder_sink(hsd, &data[sunk], data_sz - sunk, &sink_sz);
-            if (sres < 0) { die("sink"); }
-            sunk += sink_sz;
-        }
+	if (data_sz > 0) {
+	    sres = heatshrink_decoder_sink(hsd, &data[sunk], data_sz - sunk, &sink_sz);
+	    if (sres < 0) { die("sink"); }
+	    sunk += sink_sz;
+	}
 
-        do {
-            pres = heatshrink_decoder_poll(hsd, out_buf, out_sz, &poll_sz);
-            if (pres < 0) { die("poll"); }
-            if (handle_sink(out, poll_sz, out_buf) < 0) die("handle_sink");
-        } while (pres == HSDR_POLL_MORE);
-        
-        if (data_sz == 0 && poll_sz == 0) {
-            fres = heatshrink_decoder_finish(hsd);
-            if (fres < 0) { die("finish"); }
-            if (fres == HSDR_FINISH_DONE) { return 1; }
-        }
+	do {
+	    pres = heatshrink_decoder_poll(hsd, out_buf, out_sz, &poll_sz);
+	    if (pres < 0) { die("poll"); }
+	    if (handle_sink(out, poll_sz, out_buf) < 0) die("handle_sink");
+	} while (pres == HSDR_POLL_MORE);
+
+	if (data_sz == 0 && poll_sz == 0) {
+	    fres = heatshrink_decoder_finish(hsd);
+	    if (fres < 0) { die("finish"); }
+	    if (fres == HSDR_FINISH_DONE) { return 1; }
+	}
     } while (sunk < data_sz);
 
     return 0;
@@ -244,8 +264,7 @@ static int decode(config *cfg) {
     size_t window_sz = 1 << window_sz2;
     size_t ibs = cfg->decoder_input_buffer_size;
     heatshrink_decoder *hsd = heatshrink_decoder_alloc(ibs,
-        window_sz2, cfg->lookahead_sz2);
-    if (hsd == NULL) { die("failed to init decoder"); }
+	window_sz2, cfg->lookahead_sz2);
 
     ssize_t read_sz = 0;
 
@@ -255,26 +274,26 @@ static int decode(config *cfg) {
 
     /* Process input until end of stream */
     while (1) {
-        uint8_t *input = NULL;
-        read_sz = handle_read(in, window_sz, &input);
-        if (input == NULL) {
-            fprintf(stderr, "handle read failure\n");
-            die("read");
-        }
-        if (read_sz == 0) {
-            fres = heatshrink_decoder_finish(hsd);
-            if (fres < 0) { die("finish"); }
-            if (fres == HSDR_FINISH_DONE) break;
-        } else if (read_sz < 0) {
-            die("read");
-        } else {
-            if (decoder_sink_read(cfg, hsd, input, read_sz)) { break; }
-            if (handle_drop(in, read_sz) < 0) { die("drop"); }
-        }
+	uint8_t *input = NULL;
+	read_sz = handle_read(in, window_sz, &input);
+	if (input == NULL) {
+	    fprintf(stderr, "handle read failure\n");
+	    die("read");
+	}
+	if (read_sz == 0) {
+	    fres = heatshrink_decoder_finish(hsd);
+	    if (fres < 0) { die("finish"); }
+	    if (fres == HSDR_FINISH_DONE) break;
+	} else if (read_sz < 0) {
+	    die("read");
+	} else {
+	    if (decoder_sink_read(cfg, hsd, input, read_sz)) { break; }
+	    if (handle_drop(in, read_sz) < 0) { die("drop"); }
+	}
     }
     if (read_sz == -1) { HEATSHRINK_ERR(1, "read"); }
-        
-    heatshrink_decoder_free(hsd);
+
+    /* heatshrink_decoder_free(hsd); */
     close_and_report(cfg);
     return 0;
 }
@@ -283,9 +302,9 @@ static void report(config *cfg) {
     size_t inb = cfg->in->total;
     size_t outb = cfg->out->total;
     fprintf(cfg->out->fd == STDOUT_FILENO ? stderr : stdout,
-        "%s %0.2f %%\t %zd -> %zd (-w %u -l %u)\n",
-        cfg->in_fname, 100.0 - (100.0 * outb) / inb, inb, outb,
-        cfg->window_sz2, cfg->lookahead_sz2);
+	"%s %0.2f %%\t %zd -> %zd (-w %u -l %u)\n",
+	cfg->in_fname, 100.0 - (100.0 * outb) / inb, inb, outb,
+	cfg->window_sz2, cfg->lookahead_sz2);
 }
 
 static void proc_args(config *cfg, int argc, char **argv) {
@@ -297,45 +316,12 @@ static void proc_args(config *cfg, int argc, char **argv) {
     cfg->verbose = 0;
     cfg->in_fname = "-";
     cfg->out_fname = "-";
-#if 0
-    int a = 0;
-    while ((a = getopt(argc, argv, "hedi:w:l:v")) != -1) {
-        switch (a) {
-        case 'h':               /* help */
-            usage();
-        case 'e':               /* encode */
-            cfg->cmd = OP_ENC; break;
-        case 'd':               /* decode */
-            cfg->cmd = OP_DEC; break;
-        case 'i':               /* input buffer size */
-            cfg->decoder_input_buffer_size = atoi(optarg);
-            break;
-        case 'w':               /* window bits */
-            cfg->window_sz2 = atoi(optarg);
-            break;
-        case 'l':               /* lookahead bits */
-            cfg->lookahead_sz2 = atoi(optarg);
-            break;
-        case 'v':               /* verbosity++ */
-            cfg->verbose++;
-            break;
-        case '?':               /* unknown argument */
-        default:
-            usage();
-        }
-    }
-    argc -= optind;
-    argv += optind;
-    if (argc > 0) {
-        cfg->in_fname = argv[0];
-        argc--;
-        argv++;
-    }
-    if (argc > 0) { cfg->out_fname = argv[0]; }
-#else
-    cfg->in_fname = argv[1];
-    cfg->out_fname = argv[2];
-#endif
+
+    /* for testing only */
+    if (argc > 1)
+	cfg->in_fname = argv[1];
+    if (argc > 2)
+	cfg->out_fname = argv[2];
 }
 
 int main(int argc, char **argv) {
@@ -344,9 +330,9 @@ int main(int argc, char **argv) {
     proc_args(&cfg, argc, argv);
 
     if (0 == strcmp(cfg.in_fname, cfg.out_fname)
-        && (0 != strcmp("-", cfg.in_fname))) {
-        fprintf(stderr, "Refusing to overwrite file '%s' with itself.\n", cfg.in_fname);
-        exit(1);
+	&& (0 != strcmp("-", cfg.in_fname))) {
+	fprintf(stderr, "Refusing to overwrite file '%s' with itself.\n", cfg.in_fname);
+	exit(1);
     }
 
     cfg.in = handle_open(cfg.in_fname, IO_READ, cfg.buffer_size);
@@ -358,8 +344,8 @@ int main(int argc, char **argv) {
 	    printf("Not supported!\n");
 	    return -1;
     } else if (cfg.cmd == OP_DEC) {
-        return decode(&cfg);
+	return decode(&cfg);
     } else {
-        usage();
+	usage();
     }
 }
