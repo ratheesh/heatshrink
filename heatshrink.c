@@ -14,7 +14,7 @@
 #define DEF_DECODER_INPUT_BUFFER_SIZE HEATSHRINK_STATIC_INPUT_BUFFER_SIZE
 #define DEF_BUFFER_SIZE (4 * 1024)
 
-#if 0
+#if 1
 #define LOG(...) fprintf(stderr, __VA_ARGS__)
 #else
 #define LOG(...) /* NO-OP */
@@ -184,9 +184,14 @@ static ssize_t handle_sink(io_handle *io, size_t size, uint8_t *input) {
     if (io->mode != IO_WRITE) { return -1; }
 
     if (io->fill + size > io->size) {
-
+	
+/*	if (io->fill % 2) {
+		printf("Odd bytes - %d\n", io->fill);
+		io->fill--;
+	}
+*/
 	/* write io->buf to FPGA here */
-	ssize_t written = write(io->fd, io->buf, io->fill);
+	ssize_t written = write(io->fd, io->buf, (io->fill % 2)?(io->fill-1):io->fill);
 
 	LOG("@ flushing %zd, wrote %zd\n", io->fill, written);
 	io->total += written;
@@ -203,6 +208,9 @@ static void handle_close(io_handle *io) {
     if (io->fd != -1) {
 	if (io->mode == IO_WRITE) {
 
+	if (io->fill % 2) {
+		printf("WARN: Odd number of bytes to write at the end of buffer(%d)!\n\r", io->fill);
+	}
 	    /* write io->buf to FPGA here */
 	    ssize_t written = write(io->fd, io->buf, io->fill);
 	    io->total += written;
@@ -313,7 +321,7 @@ static void proc_args(config *cfg, int argc, char **argv) {
     cfg->buffer_size = DEF_BUFFER_SIZE;
     cfg->decoder_input_buffer_size = DEF_DECODER_INPUT_BUFFER_SIZE;
     cfg->cmd = OP_DEC;
-    cfg->verbose = 0;
+    cfg->verbose = 1;
     cfg->in_fname = "-";
     cfg->out_fname = "-";
 
@@ -328,6 +336,10 @@ int main(int argc, char **argv) {
     config cfg;
     memset(&cfg, 0, sizeof(cfg));
     proc_args(&cfg, argc, argv);
+
+    setbuf(stdout, NULL);
+    setbuf(stdin, NULL);
+    setbuf(stderr, NULL);
 
     if (0 == strcmp(cfg.in_fname, cfg.out_fname)
 	&& (0 != strcmp("-", cfg.in_fname))) {
